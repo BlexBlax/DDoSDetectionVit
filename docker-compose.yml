@@ -1,0 +1,109 @@
+services:
+  # Edge reverse proxy and load balancer
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - gateway1
+      - gateway2
+      - gateway3
+    restart: unless-stopped
+
+  # Inspection gateway nodes
+  gateway1:
+    build: .
+    command: python gateway.py
+    environment:
+      - GATEWAY_ID=1
+      - PORT=5002
+      - BACKEND_URL=http://netguard:5001
+      - REDIS_HOST=redis
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      netguard:
+        condition: service_started
+    restart: unless-stopped
+
+  gateway2:
+    build: .
+    command: python gateway.py
+    environment:
+      - GATEWAY_ID=2
+      - PORT=5003
+      - BACKEND_URL=http://netguard:5001
+      - REDIS_HOST=redis
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      netguard:
+        condition: service_started
+    restart: unless-stopped
+
+  gateway3:
+    build: .
+    command: python gateway.py
+    environment:
+      - GATEWAY_ID=3
+      - PORT=5004
+      - BACKEND_URL=http://netguard:5001
+      - REDIS_HOST=redis
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      netguard:
+        condition: service_started
+    restart: unless-stopped
+
+  # Shared Redis cache for cluster state
+  redis:
+    image: redis:alpine
+    # No published ports: Redis is only reachable from other containers.
+    # Inspect it with: docker compose exec redis redis-cli
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    restart: unless-stopped
+
+  # Main backend application and dashboard
+  netguard:
+    build: .
+    command: python app.py
+    ports:
+      - "127.0.0.1:5001:5001"   # dashboard reachable from this machine only
+    env_file: .env
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - REDIS_HOST=redis
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Load tester (run with: docker compose --profile test run visitor)
+  visitor:
+    image: python:3.12-slim
+    profiles: ["test"]
+    depends_on:
+      - nginx
+    volumes:
+      - ./loadtest:/loadtest:ro
+    environment:
+      TARGET_URL: "http://nginx:80/"
+      THREADS: "6"
+      SECONDS: "15"
+      DELAY: "0.02"
+    command: sh -c "pip install -q requests && python /loadtest/load_test.py"
